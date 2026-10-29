@@ -6,6 +6,7 @@ import com.bank.debitcard.exception.NotFoundException;
 import com.bank.debitcard.mapper.DebitCardMapper;
 import com.bank.debitcard.model.DebitCard;
 import com.bank.debitcard.repository.DebitCardRepository;
+import com.bank.debitcard.repository.KnownAccountRepository;
 import com.bank.debitcard.service.DebitCardService;
 import io.reactivex.rxjava3.core.Completable;
 import io.reactivex.rxjava3.core.Flowable;
@@ -26,6 +27,7 @@ import java.util.UUID;
 public class DebitCardServiceImpl implements DebitCardService {
 
     private final DebitCardRepository repository;
+    private final KnownAccountRepository knownAccountRepository;
 
     @Override
     public Single<DebitCardDto> create(DebitCardDto dto) {
@@ -35,12 +37,16 @@ public class DebitCardServiceImpl implements DebitCardService {
         if (!accounts.contains(primary)) {
             return Single.error(new BusinessException("Primary account must be one of the linked accounts"));
         }
-        DebitCard card = DebitCardMapper.toEntity(dto);
-        card.setId(null);
-        card.setCardNumber(newCardNumber());
-        card.setAccountNumbers(accounts);
-        card.setPrimaryAccount(primary);
-        return Single.fromPublisher(repository.save(card)).map(DebitCardMapper::toDto);
+        return validateAccounts(dto.getCustomerDocument(), accounts)
+                .flatMap(valid -> {
+                    DebitCard card = DebitCardMapper.toEntity(dto);
+                    card.setId(null);
+                    card.setCardNumber(newCardNumber());
+                    card.setAccountNumbers(valid);
+                    card.setPrimaryAccount(primary);
+                    return Single.fromPublisher(repository.save(card));
+                })
+                .map(DebitCardMapper::toDto);
     }
 
     @Override
@@ -69,9 +75,13 @@ public class DebitCardServiceImpl implements DebitCardService {
             if (!accounts.contains(primary)) {
                 primary = accounts.get(0); // the old primary was unlinked
             }
-            card.setAccountNumbers(accounts);
-            card.setPrimaryAccount(primary);
-            return Single.fromPublisher(repository.save(card));
+            String finalPrimary = primary;
+            return validateAccounts(card.getCustomerDocument(), accounts)
+                    .flatMap(valid -> {
+                        card.setAccountNumbers(valid);
+                        card.setPrimaryAccount(finalPrimary);
+                        return Single.fromPublisher(repository.save(card));
+                    });
         }).map(DebitCardMapper::toDto);
     }
 
@@ -105,5 +115,23 @@ public class DebitCardServiceImpl implements DebitCardService {
     private Single<DebitCard> findEntity(String cardNumber) {
         return Maybe.fromPublisher(repository.findByCardNumber(cardNumber))
                 .switchIfEmpty(Single.error(new NotFoundException("Debit card not found: " + cardNumber)));
+    }
+
+    /** Checks, against the local copy, that every account exists and belongs to the holder. */
+    private Single<List<String>> validateAccounts(String customerDocument, List<String> accounts) {
+        return Single.fromPublisher(knownAccountRepository.findAllById(accounts).collectList())
+                .flatMap(found -> {
+                    if (found.size() != accounts.size()) {
+                        return Single.<List<String>>error(new BusinessException(
+                                "One or more accounts do not exist"));
+                    }
+                    boolean otherOwner = found.stream()
+                            .anyMatch(a -> !customerDocument.equals(a.getCustomerDocument()));
+                    if (otherOwner) {
+                        return Single.<List<String>>error(new BusinessException(
+                                "All accounts must belong to the card holder"));
+                    }
+                    return Single.just(accounts);
+                });
     }
 }

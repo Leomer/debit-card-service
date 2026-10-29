@@ -4,7 +4,9 @@ import com.bank.debitcard.dto.DebitCardDto;
 import com.bank.debitcard.exception.BusinessException;
 import com.bank.debitcard.exception.NotFoundException;
 import com.bank.debitcard.model.DebitCard;
+import com.bank.debitcard.model.KnownAccount;
 import com.bank.debitcard.repository.DebitCardRepository;
+import com.bank.debitcard.repository.KnownAccountRepository;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
@@ -27,6 +29,9 @@ class DebitCardServiceImplTest {
     @Mock
     private DebitCardRepository repository;
 
+    @Mock
+    private KnownAccountRepository knownAccountRepository;
+
     @InjectMocks
     private DebitCardServiceImpl service;
 
@@ -42,6 +47,8 @@ class DebitCardServiceImplTest {
 
     @Test
     void createShouldDefaultPrimaryAccountToTheFirstOne() {
+        when(knownAccountRepository.findAllById(List.of("A", "B")))
+                .thenReturn(Flux.just(known("A", "123"), known("B", "123")));
         saveReturnsSameEntity();
         DebitCardDto dto = DebitCardDto.builder().customerDocument("123")
                 .accountNumbers(List.of("A", "B", "A")).build();
@@ -100,6 +107,8 @@ class DebitCardServiceImplTest {
     @Test
     void updateShouldMovePrimaryToFirstAccountWhenOldOneIsUnlinked() {
         when(repository.findByCardNumber("DC1")).thenReturn(Mono.just(card()));
+        when(knownAccountRepository.findAllById(List.of("B", "C")))
+                .thenReturn(Flux.just(known("B", "123"), known("C", "123")));
         saveReturnsSameEntity();
         DebitCardDto dto = DebitCardDto.builder().customerDocument("123")
                 .accountNumbers(List.of("B", "C")).build();
@@ -118,5 +127,32 @@ class DebitCardServiceImplTest {
 
         service.delete("DC1").test().assertComplete();
         verify(repository).delete(c);
+    }
+
+    @Test
+    void createShouldFailWhenAnAccountIsUnknown() {
+        when(knownAccountRepository.findAllById(List.of("A", "B")))
+                .thenReturn(Flux.just(known("A", "123")));
+        DebitCardDto dto = DebitCardDto.builder().customerDocument("123")
+                .accountNumbers(List.of("A", "B")).build();
+
+        service.create(dto).test().assertError(BusinessException.class);
+        verify(repository, never()).save(any());
+    }
+
+    @Test
+    void createShouldFailWhenAnAccountBelongsToAnotherCustomer() {
+        when(knownAccountRepository.findAllById(List.of("A")))
+                .thenReturn(Flux.just(known("A", "999")));
+        DebitCardDto dto = DebitCardDto.builder().customerDocument("123")
+                .accountNumbers(List.of("A")).build();
+
+        service.create(dto).test().assertError(BusinessException.class);
+        verify(repository, never()).save(any());
+    }
+
+    private KnownAccount known(String number, String customer) {
+        return KnownAccount.builder().accountNumber(number).customerDocument(customer)
+                .accountType("SAVINGS").build();
     }
 }
