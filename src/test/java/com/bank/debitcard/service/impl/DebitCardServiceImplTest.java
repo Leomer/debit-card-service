@@ -1,6 +1,7 @@
 package com.bank.debitcard.service.impl;
 
 import com.bank.debitcard.dto.DebitCardDto;
+import com.bank.debitcard.event.CardEventPublisher;
 import com.bank.debitcard.exception.BusinessException;
 import com.bank.debitcard.exception.NotFoundException;
 import com.bank.debitcard.model.DebitCard;
@@ -18,6 +19,7 @@ import reactor.core.publisher.Mono;
 import java.util.List;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -31,6 +33,9 @@ class DebitCardServiceImplTest {
 
     @Mock
     private KnownAccountRepository knownAccountRepository;
+
+    @Mock
+    private CardEventPublisher cardEventPublisher;
 
     @InjectMocks
     private DebitCardServiceImpl service;
@@ -127,6 +132,7 @@ class DebitCardServiceImplTest {
 
         service.delete("DC1").test().assertComplete();
         verify(repository).delete(c);
+        verify(cardEventPublisher).cardDeleted("DC1");
     }
 
     @Test
@@ -154,5 +160,15 @@ class DebitCardServiceImplTest {
     private KnownAccount known(String number, String customer) {
         return KnownAccount.builder().accountNumber(number).customerDocument(customer)
                 .accountType("SAVINGS").build();
+    }
+
+    @Test
+    void changePrimaryAccountShouldPublishCardEvent() {
+        when(repository.findByCardNumber("DC1")).thenReturn(Mono.just(card()));
+        saveReturnsSameEntity();
+
+        service.changePrimaryAccount("DC1", "B").test().assertComplete();
+
+        verify(cardEventPublisher).cardSaved(argThat(c -> "B".equals(c.getPrimaryAccount())));
     }
 }

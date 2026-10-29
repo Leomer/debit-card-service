@@ -1,6 +1,7 @@
 package com.bank.debitcard.service.impl;
 
 import com.bank.debitcard.dto.DebitCardDto;
+import com.bank.debitcard.event.CardEventPublisher;
 import com.bank.debitcard.exception.BusinessException;
 import com.bank.debitcard.exception.NotFoundException;
 import com.bank.debitcard.mapper.DebitCardMapper;
@@ -28,6 +29,7 @@ public class DebitCardServiceImpl implements DebitCardService {
 
     private final DebitCardRepository repository;
     private final KnownAccountRepository knownAccountRepository;
+    private final CardEventPublisher cardEventPublisher;
 
     @Override
     public Single<DebitCardDto> create(DebitCardDto dto) {
@@ -46,7 +48,8 @@ public class DebitCardServiceImpl implements DebitCardService {
                     card.setPrimaryAccount(primary);
                     return Single.fromPublisher(repository.save(card));
                 })
-                .map(DebitCardMapper::toDto);
+                .map(DebitCardMapper::toDto)
+                .doOnSuccess(cardEventPublisher::cardSaved);
     }
 
     @Override
@@ -82,7 +85,8 @@ public class DebitCardServiceImpl implements DebitCardService {
                         card.setPrimaryAccount(finalPrimary);
                         return Single.fromPublisher(repository.save(card));
                     });
-        }).map(DebitCardMapper::toDto);
+        }).map(DebitCardMapper::toDto)
+        .doOnSuccess(cardEventPublisher::cardSaved);
     }
 
     @Override
@@ -94,14 +98,16 @@ public class DebitCardServiceImpl implements DebitCardService {
             }
             card.setPrimaryAccount(accountNumber);
             return Single.fromPublisher(repository.save(card));
-        }).map(DebitCardMapper::toDto);
+        }).map(DebitCardMapper::toDto)
+        .doOnSuccess(cardEventPublisher::cardSaved);
     }
 
     @Override
     public Completable delete(String cardNumber) {
         log.info("Deleting debit card {}", cardNumber);
         return findEntity(cardNumber)
-                .flatMapCompletable(card -> Completable.fromPublisher(repository.delete(card)));
+                .flatMapCompletable(card -> Completable.fromPublisher(repository.delete(card))
+                        .doOnComplete(() -> cardEventPublisher.cardDeleted(cardNumber)));
     }
 
     private List<String> distinct(List<String> accounts) {
